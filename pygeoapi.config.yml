@@ -19,6 +19,11 @@ server:
     name: TinyDB
     connection: /tmp/pygeoapi-process-manager.db
     output_dir: /tmp/
+  # API key authentication — all write operations (job submission) require
+  # the X-API-Key header. Read endpoints (GET /processes, GET /jobs) remain
+  # public so clients can discover available processes without credentials.
+  api_key_header: X-API-Key
+  api_key: ${PYGEOAPI_API_KEY}
 
 logging:
   level: INFO

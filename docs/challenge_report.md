@@ -235,6 +235,109 @@ Same result body, returned inline. Server still records the job (note the `Locat
 
 ---
 
+## Security, Authentication, and Scaling
+
+### Authentication
+
+The bare pygeoapi container exposes all endpoints publicly by default. For this
+setup I added API key authentication via the `api_key_header` and `api_key`
+configuration fields in `pygeoapi.config.yml`:
+
+```yaml
+server:
+  api_key_header: X-API-Key
+  api_key: ${PYGEOAPI_API_KEY}
+```
+
+The key is never hardcoded. It is stored in a `.env` file (excluded from version
+control via `.gitignore`) and injected into the container at runtime via
+`docker-compose.yml`:
+
+```yaml
+env_file:
+  - .env
+environment:
+  - PYGEOAPI_API_KEY=${PYGEOAPI_API_KEY}
+```
+
+With this in place, POST requests to `/processes/{id}/execution` require the
+header `X-API-Key: <value>`. GET endpoints (`/processes`, `/jobs`) remain public
+so clients can discover available processes without credentials — consistent with
+how OGC APIs are typically designed for discovery-first access.
+
+Submitting a job with the key:
+
+```bash
+curl -X POST http://localhost:5000/processes/geospatial-buffer/execution \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: 9f4e2a1b8c6d3f7e0a5b2c9d4e1f8a3b6c7d2e5f0a1b4c7d8e9f2a3b6c1d4e7" \
+  -H "Prefer: respond-async" \
+  -d '{"inputs": {"geometry": {"type": "Point", "coordinates": [3.8792, 6.9271]}, "distance": 5000}}'
+```
+
+Without the key:
+
+```
+HTTP/1.1 401 UNAUTHORIZED
+{"code": "NotAuthorized", "description": "Access token is invalid or missing."}
+```
+
+For production, API key auth would be complemented by HTTPS (TLS termination at
+a reverse proxy like nginx or Traefik), rate limiting per key, and optionally
+OAuth 2.0 for user-level access control.
+
+### Scaling Considerations
+
+The current setup uses TinyDB as the job manager — a file-backed store that works
+well for a single-container demo but does not survive container restarts and
+cannot be shared across multiple instances.
+
+For production scaling, two changes are needed:
+
+**1. Switch to a shared job manager**
+
+Replace TinyDB with PostgreSQL in `pygeoapi.config.yml`:
+
+```yaml
+server:
+  manager:
+    name: PostgreSQL
+    connection: postgresql://user:pass@db:5432/pygeoapi_jobs
+    output_dir: s3://my-bucket/process-outputs/
+```
+
+This lets multiple pygeoapi containers share job state and write outputs to
+object storage, which is accessible from any replica.
+
+**2. Scale horizontally**
+
+The `docker-compose.yml` includes resource limits per container:
+
+```yaml
+deploy:
+  resources:
+    limits:
+      cpus: "1.0"
+      memory: 512M
+```
+
+For Docker Swarm, scaling to three replicas behind an internal load balancer:
+
+```bash
+docker stack deploy -c docker-compose.yml ogcapi
+docker service scale ogcapi_pygeoapi=3
+```
+
+For Kubernetes, a Deployment with `replicas: 3` and a ClusterIP Service in
+front achieves the same result, with the added benefit of rolling updates and
+pod health management via the defined `healthcheck`.
+
+The healthcheck in `docker-compose.yml` polls `GET /processes` every 30 seconds.
+Any replica that fails three consecutive checks is restarted automatically — this
+covers the case where the process import fails silently on startup.
+
+---
+
 ## Connection to the GSoC Project
 
 The interesting thing about OGC API Processes from an MCP standpoint is how directly the two models correspond:

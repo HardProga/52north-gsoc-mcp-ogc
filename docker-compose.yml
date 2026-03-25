@@ -11,4 +11,29 @@ services:
       - PYGEOAPI_CONFIG=/pygeoapi/local.config.yml
       - PYGEOAPI_OPENAPI=/pygeoapi/local.openapi.yml
       - PYTHONPATH=/pygeoapi
+      # API key injected from .env - never hardcoded
+      - PYGEOAPI_API_KEY=${PYGEOAPI_API_KEY}
+    env_file:
+      - .env
     restart: unless-stopped
+    # Resource limits - prevents runaway processes from consuming the host.
+    # Raise mem_limit and cpus for production workloads.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/processes"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+# Production scaling note:
+# To run multiple replicas behind a load balancer, replace TinyDB with a
+# shared PostgreSQL job manager and deploy via Docker Swarm or Kubernetes.
+# Scale with: docker service scale ogcapi_pygeoapi=3
